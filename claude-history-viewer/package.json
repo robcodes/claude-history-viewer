@@ -1,0 +1,35 @@
+{
+  "name": "claude-history-viewer",
+  "version": "1.0.0",
+  "description": "A web-based viewer for Claude Code conversation history",
+  "main": "index.js",
+  "bin": {
+    "claude-history-viewer": "./bin/cli.js"
+  },
+  "scripts": {
+    "start": "node bin/cli.js",
+    "dev": "node bin/cli.js --dev"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "history",
+    "viewer",
+    "cli"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "commander": "^11.1.0",
+    "glob": "^10.3.10",
+    "open": "^9.1.0",
+    "chalk": "^5.3.0",
+    "portfinder": "^1.0.32"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "type": "module"
+}
