@@ -935,3 +935,31 @@ body {
     gap: 1rem;
   }
 }
+
+/* Expandable Content */
+.expandable-content {
+  position: relative;
+}
+
+.expandable-content .content-preview,
+.expandable-content .content-full {
+  margin: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.expandable-content .show-more-btn {
+  margin-top: 0.5rem;
+  padding: 0.375rem 0.75rem;
+  background-color: var(--primary-color);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.expandable-content .show-more-btn:hover {
+  background-color: var(--primary-hover);
+}

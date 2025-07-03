@@ -36,6 +36,28 @@ class ClaudeHistoryViewer {
       this.showDeveloperInfo = !this.showDeveloperInfo;
       this.updateDeveloperView();
     });
+    
+    // Event delegation for dynamic show more/less buttons
+    document.addEventListener('click', (e) => {
+      if (e.target.classList.contains('show-more-btn')) {
+        const container = e.target.closest('.expandable-content');
+        if (container) {
+          const preview = container.querySelector('.content-preview');
+          const full = container.querySelector('.content-full');
+          const isExpanded = full.style.display !== 'none';
+          
+          if (isExpanded) {
+            preview.style.display = 'block';
+            full.style.display = 'none';
+            e.target.textContent = 'Show more...';
+          } else {
+            preview.style.display = 'none';
+            full.style.display = 'block';
+            e.target.textContent = 'Show less';
+          }
+        }
+      }
+    });
   }
   
   updateDeveloperView() {
@@ -261,6 +283,15 @@ class ClaudeHistoryViewer {
     const toolUseContent = this.getToolUseContent(toolUse);
     const toolResultContent = this.getToolResultContent(toolResult);
     const toolResultData = toolResult.toolUseResult; // Get the additional tool result data
+    
+    // If toolResultData is an object and contains the actual content, use it
+    if (typeof toolResultData === 'object' && toolResultData !== null && toolResultData.content) {
+      // Override the content if it's "[object Object]"
+      if (toolResultContent && toolResultContent.content === '[object Object]') {
+        toolResultContent.content = toolResultData;
+      }
+    }
+    
     const isError = toolResultContent?.is_error;
     
     return `
@@ -572,22 +603,7 @@ class ClaudeHistoryViewer {
       });
     });
     
-    // Setup show more buttons for long content
-    document.querySelectorAll('.show-more-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const container = btn.closest('.long-content');
-        const collapsibleContent = container.querySelector('.collapsible-content');
-        
-        if (collapsibleContent.style.display === 'none' || !collapsibleContent.style.display) {
-          collapsibleContent.style.display = 'block';
-          btn.textContent = 'Show less...';
-        } else {
-          collapsibleContent.style.display = 'none';
-          btn.textContent = 'Show more...';
-        }
-      });
-    });
+    // Note: Show more buttons are handled by event delegation in setupEventListeners()
   }
   
   // Helper methods
@@ -668,7 +684,32 @@ class ClaudeHistoryViewer {
     let html = '';
     
     // First, show the main content
-    const content = toolResult.content || '';
+    let content = toolResult.content || '';
+    
+    // If content is an object (either "[object Object]" string or actual object), 
+    // try to extract from it or toolResultData
+    if (content === '[object Object]' || typeof content === 'object') {
+      // If content is actually the toolResultData object
+      if (typeof content === 'object' && content.content) {
+        toolResultData = content;
+      }
+      
+      // Now extract from toolResultData
+      if (toolResultData && toolResultData.content) {
+        if (Array.isArray(toolResultData.content)) {
+          // Extract text from content array (Task tool results often have this structure)
+          const textContent = toolResultData.content
+            .filter(item => item.type === 'text')
+            .map(item => item.text)
+            .join('\n\n');
+          if (textContent) {
+            content = textContent;
+          }
+        } else if (typeof toolResultData.content === 'string') {
+          content = toolResultData.content;
+        }
+      }
+    }
     
     // Check if content is JSON
     try {
@@ -676,19 +717,7 @@ class ClaudeHistoryViewer {
       html += `<pre class="code-block">${this.escapeHtml(JSON.stringify(parsed, null, 2))}</pre>`;
     } catch {
       // Not JSON, format as text
-      if (content.length > 1000) {
-        html += `
-          <div class="long-content">
-            <pre class="code-block">${this.escapeHtml(content.substring(0, 500))}</pre>
-            <div class="collapsible-content" style="display: none;">
-              <pre class="code-block">${this.escapeHtml(content.substring(500))}</pre>
-            </div>
-            <button class="show-more-btn">Show more...</button>
-          </div>
-        `;
-      } else {
-        html += `<pre class="code-block">${this.escapeHtml(content)}</pre>`;
-      }
+      html += this.formatLongContent(content, 1000);
     }
     
     // If there's additional toolResultData, display it
@@ -782,10 +811,17 @@ class ClaudeHistoryViewer {
     }
     // Generic object display
     else {
-      html += '<div class="generic-result-data">';
-      html += '<strong>Additional Data:</strong>';
-      html += `<pre class="code-block">${this.escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
-      html += '</div>';
+      // Only show additional data if it's not just the content we already displayed
+      const hasMoreThanContent = Object.keys(data).some(key => key !== 'content');
+      if (hasMoreThanContent) {
+        html += '<div class="generic-result-data">';
+        html += '<strong>Additional Data:</strong>';
+        // Create a copy without the content field since we already displayed it
+        const dataWithoutContent = { ...data };
+        delete dataWithoutContent.content;
+        html += `<pre class="code-block">${this.escapeHtml(JSON.stringify(dataWithoutContent, null, 2))}</pre>`;
+        html += '</div>';
+      }
     }
     
     html += '</div>';
@@ -860,6 +896,23 @@ class ClaudeHistoryViewer {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+  }
+  
+  formatLongContent(content, maxLength = 1000) {
+    if (content.length <= maxLength) {
+      return `<pre class="code-block">${this.escapeHtml(content)}</pre>`;
+    }
+    
+    const contentId = 'content-' + Math.random().toString(36).substr(2, 9);
+    const truncatedContent = content.substring(0, maxLength / 2) + '\n... (content truncated) ...\n' + content.substring(content.length - 100);
+    
+    return `
+      <div class="expandable-content" id="${contentId}">
+        <pre class="code-block content-preview">${this.escapeHtml(truncatedContent)}</pre>
+        <pre class="code-block content-full" style="display: none;">${this.escapeHtml(content)}</pre>
+        <button class="show-more-btn">Show more...</button>
+      </div>
+    `;
   }
   
   formatDate(timestamp) {
