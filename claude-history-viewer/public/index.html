@@ -23,7 +23,20 @@
     </header>
 
     <div class="container">
-      <aside class="sidebar">
+      <div id="sidebarOverlay" class="sidebar-overlay"></div>
+      
+      <button id="sidebarToggle" class="sidebar-toggle" aria-label="Toggle sidebar">
+        <span class="toggle-icon">☰</span>
+      </button>
+      
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+          <h2 class="sidebar-title">Conversations</h2>
+          <button id="sidebarClose" class="sidebar-close" aria-label="Close sidebar">
+            <span>×</span>
+          </button>
+        </div>
+        
         <div class="search-container">
           <input 
             type="text" 
@@ -39,7 +52,7 @@
         </div>
       </aside>
 
-      <main class="main-content">
+      <main class="main-content" id="mainContent">
         <div id="conversationView" class="conversation-view">
           <div class="welcome">
             <h2>Welcome to Claude History Viewer</h2>

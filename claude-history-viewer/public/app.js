@@ -6,6 +6,7 @@ class ClaudeHistoryViewer {
     this.showDeveloperInfo = false;
     this.messageMap = new Map(); // For quick message lookup by UUID
     this.sidechainMap = new Map(); // Track sidechain conversations
+    this.sidebarCollapsed = false;
     
     this.elements = {
       conversationList: document.getElementById('conversationList'),
@@ -13,7 +14,12 @@ class ClaudeHistoryViewer {
       searchInput: document.getElementById('searchInput'),
       searchBtn: document.getElementById('searchBtn'),
       stats: document.getElementById('stats'),
-      developerToggle: document.getElementById('developerToggle')
+      developerToggle: document.getElementById('developerToggle'),
+      sidebar: document.getElementById('sidebar'),
+      sidebarToggle: document.getElementById('sidebarToggle'),
+      sidebarClose: document.getElementById('sidebarClose'),
+      sidebarOverlay: document.getElementById('sidebarOverlay'),
+      mainContent: document.getElementById('mainContent')
     };
     
     this.init();
@@ -35,6 +41,34 @@ class ClaudeHistoryViewer {
     this.elements.developerToggle?.addEventListener('click', () => {
       this.showDeveloperInfo = !this.showDeveloperInfo;
       this.updateDeveloperView();
+    });
+    
+    // Sidebar toggle functionality
+    this.elements.sidebarToggle?.addEventListener('click', () => {
+      this.toggleSidebar();
+    });
+    
+    this.elements.sidebarClose?.addEventListener('click', () => {
+      this.toggleSidebar();
+    });
+    
+    // Close sidebar when clicking overlay on mobile
+    this.elements.sidebarOverlay?.addEventListener('click', () => {
+      if (!this.sidebarCollapsed) {
+        this.toggleSidebar();
+      }
+    });
+    
+    // Initialize sidebar state
+    this.updateSidebarState();
+    
+    // Handle window resize
+    let resizeTimeout;
+    window.addEventListener('resize', () => {
+      clearTimeout(resizeTimeout);
+      resizeTimeout = setTimeout(() => {
+        this.updateSidebarState();
+      }, 250);
     });
     
     // Event delegation for dynamic show more/less buttons
@@ -67,13 +101,42 @@ class ClaudeHistoryViewer {
       btn.classList.toggle('active', this.showDeveloperInfo);
     }
     
-    // Toggle visibility of developer elements
-    document.querySelectorAll('.thinking-block, .message-metadata, .technical-details').forEach(el => {
+    // Toggle visibility of developer elements (excluding thinking blocks)
+    document.querySelectorAll('.message-metadata, .technical-details').forEach(el => {
       el.style.display = this.showDeveloperInfo ? 'block' : 'none';
     });
     
     // Toggle thread lines in developer mode
     document.querySelector('.messages-container')?.classList.toggle('show-thread-lines', this.showDeveloperInfo);
+  }
+  
+  toggleSidebar() {
+    this.sidebarCollapsed = !this.sidebarCollapsed;
+    this.updateSidebarState();
+  }
+  
+  updateSidebarState() {
+    const isMobile = window.innerWidth <= 768;
+    
+    if (this.sidebarCollapsed) {
+      this.elements.sidebar?.classList.add('collapsed');
+      this.elements.mainContent?.classList.add('sidebar-collapsed');
+      this.elements.sidebarToggle?.classList.add('visible');
+      this.elements.sidebarOverlay?.classList.remove('visible');
+    } else {
+      this.elements.sidebar?.classList.remove('collapsed');
+      this.elements.mainContent?.classList.remove('sidebar-collapsed');
+      this.elements.sidebarToggle?.classList.remove('visible');
+      
+      if (isMobile) {
+        this.elements.sidebarOverlay?.classList.add('visible');
+      }
+    }
+    
+    // On desktop, show toggle button when sidebar is collapsed
+    if (!isMobile) {
+      this.elements.sidebarToggle?.classList.toggle('visible', this.sidebarCollapsed);
+    }
   }
   
   async loadStats() {
@@ -132,6 +195,11 @@ class ClaudeHistoryViewer {
         
         document.querySelectorAll('.conversation-item').forEach(i => i.classList.remove('active'));
         item.classList.add('active');
+        
+        // Auto-collapse sidebar on mobile after selecting a conversation
+        if (window.innerWidth <= 768 && !this.sidebarCollapsed) {
+          this.toggleSidebar();
+        }
       });
     });
   }
@@ -479,7 +547,7 @@ class ClaudeHistoryViewer {
     if (!thinkingContent) return '';
     
     return `
-      <div class="thinking-block" style="display: ${this.showDeveloperInfo ? 'block' : 'none'}">
+      <div class="thinking-block">
         <div class="thinking-header">
           <span class="thinking-icon">🧠</span>
           <span>Internal Reasoning</span>
