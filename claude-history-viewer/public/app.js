@@ -88,7 +88,7 @@ class ClaudeHistoryViewer {
         <span class="stat-item">📂 ${stats.projects} projects</span>
       `;
     } catch (error) {
-      console.error('Failed to load stats:', error);
+      // Failed to load stats - continue silently
     }
   }
   

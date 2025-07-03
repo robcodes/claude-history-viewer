@@ -1,0 +1,55 @@
+# Development files
+*.log
+.env
+.env.local
+.env.*.local
+.DS_Store
+
+# Git
+.git
+.gitignore
+
+# Editor directories and files
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Test coverage
+coverage
+.nyc_output
+
+# Documentation source files
+docs/
+
+# Development directories
+test/
+tests/
+examples/
+
+# Build files
+*.tgz
+
+# CI/CD
+.github/
+.travis.yml
+.gitlab-ci.yml
+
+# Misc
+TODO.md
+CONTRIBUTING.md
+.editorconfig
+.eslintrc*
+.prettierrc*
+
+# Claude specific
+.claude/
+CLAUDE.md
+
+# Local development
+*.local
+tmp/
+temp/

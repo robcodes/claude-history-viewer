@@ -2,6 +2,32 @@
 
 A web-based viewer for Claude Code conversation history. Easily browse, search, and review your past conversations with Claude Code through a clean web interface.
 
+## Disclaimer
+
+This software is provided "as is", without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose and noninfringement. In no event shall the authors or copyright holders be liable for any claim, damages or other liability, whether in an action of contract, tort or otherwise, arising from, out of or in connection with the software or the use or other dealings in the software.
+
+## Security & Safety Best Practices
+
+**⚠️ IMPORTANT: This tool is designed for LOCAL USE ONLY on your own machine.**
+
+### Security Guidelines:
+- **Keep it local**: By default, the server binds to `localhost` only. This means it's only accessible from your own machine.
+- **Never expose to public internet**: Do not expose this server to the public internet without proper security measures (authentication, HTTPS, firewall rules, etc.).
+- **Port security**: The default configuration uses localhost binding which prevents external access. If you change the host binding, ensure you understand the security implications.
+- **Sensitive data**: Your Claude conversation history may contain sensitive information. Treat it with the same care as any personal data.
+
+### Safe Usage:
+```bash
+# Safe (localhost only):
+claude-history-viewer
+
+# Safe (specific port, still localhost):
+claude-history-viewer --port 8080
+
+# UNSAFE - Do not use unless you understand the risks:
+# claude-history-viewer --host 0.0.0.0  # Binds to all interfaces!
+```
+
 ## Features
 
 - 📋 Browse all your Claude Code conversations
@@ -19,7 +45,7 @@ npm install -g claude-history-viewer
 
 ## Usage
 
-### Basic usage
+### Starting the Server
 ```bash
 claude-history-viewer
 ```
@@ -28,6 +54,19 @@ This will:
 1. Automatically find your Claude history files
 2. Start a web server on an available port (default: 3456)
 3. Open your browser to view the interface
+
+### Stopping the Server
+To stop the server, press `Ctrl+C` in the terminal where it's running.
+
+### Running on a Specific Port
+```bash
+claude-history-viewer --port 8080
+```
+
+### Specifying a Different Claude Directory
+```bash
+claude-history-viewer --dir /path/to/your/claude/directory
+```
 
 ### Options
 
@@ -112,7 +151,3 @@ The viewer automatically finds an available port. If you need a specific port, u
 
 ### No conversations showing
 Ensure you have used Claude Code and have conversation history. Check that the history files exist in the expected directory.
-
-## License
-
-MIT

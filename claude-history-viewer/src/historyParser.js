@@ -82,7 +82,7 @@ export class HistoryParser {
         sessionId: firstMessage.sessionId
       };
     } catch (error) {
-      console.error(`Error parsing ${filePath}:`, error);
+      // Error parsing file - return null to skip this conversation
       return null;
     }
   }
@@ -105,7 +105,7 @@ export class HistoryParser {
         const msg = JSON.parse(line);
         messages.push(msg);
       } catch (e) {
-        console.error('Error parsing message:', e);
+        // Skip malformed message lines
       }
     }
     

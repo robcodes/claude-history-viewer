@@ -1,8 +1,7 @@
 {
   "name": "claude-history-viewer",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "A web-based viewer for Claude Code conversation history",
-  "main": "index.js",
   "bin": {
     "claude-history-viewer": "./bin/cli.js"
   },
@@ -17,8 +16,16 @@
     "viewer",
     "cli"
   ],
-  "author": "",
+  "author": "Claude History Viewer Contributors",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anthropics/claude-history-viewer.git"
+  },
+  "homepage": "https://github.com/anthropics/claude-history-viewer#readme",
+  "bugs": {
+    "url": "https://github.com/anthropics/claude-history-viewer/issues"
+  },
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
