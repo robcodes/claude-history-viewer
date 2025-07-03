@@ -260,6 +260,12 @@ class ClaudeHistoryViewer {
           <span>💬 ${conv.messageCount} messages</span>
           <span>🪙 ${this.formatTokens(conv.totalTokens)} tokens</span>
         </div>
+        <div class="file-path-container">
+          <span class="file-path-label">📄 File:</span>
+          <code class="file-path">${this.escapeHtml(conv.filePath)}</code>
+          <button class="copy-path-btn" onclick="viewer.copyToClipboard('${this.escapeHtml(conv.filePath).replace(/'/g, "\\'")}')">📋 Copy</button>
+          <span class="copy-feedback" style="display: none;">✅ Copied!</span>
+        </div>
       </div>
       <div class="messages-container ${this.showDeveloperInfo ? 'show-thread-lines' : ''}">
         ${this.renderMessageThread(mainMessages)}
@@ -1016,6 +1022,45 @@ class ClaudeHistoryViewer {
       return (tokens / 1000).toFixed(1) + 'k';
     }
     return tokens.toLocaleString();
+  }
+  
+  async copyToClipboard(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      
+      // Show feedback
+      const feedbackElements = document.querySelectorAll('.copy-feedback');
+      feedbackElements.forEach(el => {
+        el.style.display = 'inline';
+        setTimeout(() => {
+          el.style.display = 'none';
+        }, 2000);
+      });
+    } catch (err) {
+      // Fallback for older browsers
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-9999px';
+      document.body.appendChild(textArea);
+      textArea.select();
+      
+      try {
+        document.execCommand('copy');
+        // Show feedback
+        const feedbackElements = document.querySelectorAll('.copy-feedback');
+        feedbackElements.forEach(el => {
+          el.style.display = 'inline';
+          setTimeout(() => {
+            el.style.display = 'none';
+          }, 2000);
+        });
+      } catch (err) {
+        console.error('Failed to copy:', err);
+      }
+      
+      document.body.removeChild(textArea);
+    }
   }
 }
 
