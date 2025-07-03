@@ -20,11 +20,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/anthropics/claude-history-viewer.git"
+    "url": "git+https://github.com/robcodes/claude-history-viewer.git"
   },
-  "homepage": "https://github.com/anthropics/claude-history-viewer#readme",
+  "homepage": "https://github.com/robcodes/claude-history-viewer#readme",
   "bugs": {
-    "url": "https://github.com/anthropics/claude-history-viewer/issues"
+    "url": "https://github.com/robcodes/claude-history-viewer/issues"
   },
   "dependencies": {
     "express": "^4.18.2",
