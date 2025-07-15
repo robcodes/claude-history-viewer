@@ -226,29 +226,43 @@ class ClaudeHistoryViewer {
     this.messageMap.clear();
     this.sidechainMap.clear();
     
-    // First pass: build message map and group sidechains by sessionId
-    const sidechainGroups = new Map();
+    // First pass: build message map and identify continuous sidechain blocks
+    const sidechainBlocks = [];
+    let currentBlock = null;
     
-    this.currentConversation.messages.forEach(msg => {
+    this.currentConversation.messages.forEach((msg, index) => {
       this.messageMap.set(msg.uuid, msg);
       
       if (msg.isSidechain) {
-        const sessionId = msg.sessionId;
-        if (!sidechainGroups.has(sessionId)) {
-          sidechainGroups.set(sessionId, {
+        if (!currentBlock) {
+          currentBlock = {
             messages: [],
             firstMessageTime: msg.timestamp,
+            startIndex: index,
             taskToolUuid: null
-          });
+          };
         }
-        sidechainGroups.get(sessionId).messages.push(msg);
+        currentBlock.messages.push(msg);
+      } else if (currentBlock) {
+        // End of sidechain block
+        currentBlock.endIndex = index - 1;
+        sidechainBlocks.push(currentBlock);
+        currentBlock = null;
       }
     });
     
-    // Sort sidechain messages by timestamp within each group
-    for (const [sessionId, group] of sidechainGroups) {
-      group.messages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    // Handle case where conversation ends with a sidechain block
+    if (currentBlock) {
+      currentBlock.endIndex = this.currentConversation.messages.length - 1;
+      sidechainBlocks.push(currentBlock);
     }
+    
+    // Convert blocks to a Map structure similar to the old sidechainGroups
+    // Use block index as the key since we can't use sessionId
+    const sidechainGroups = new Map();
+    sidechainBlocks.forEach((block, index) => {
+      sidechainGroups.set(`block-${index}`, block);
+    });
     
     // Second pass: link Task tools to sidechains
     // We'll track all Task tools and their results first
@@ -295,73 +309,58 @@ class ClaudeHistoryViewer {
     // Sort task tools by timestamp
     taskTools.sort((a, b) => a.timestamp - b.timestamp);
     
-    // Now link sidechains to Task tools using improved logic
-    for (const [sessionId, group] of sidechainGroups) {
-      const sidechainStartTime = new Date(group.firstMessageTime).getTime();
+    // Now link sidechains to Task tools using position-based logic
+    for (const [blockId, block] of sidechainGroups) {
       let bestMatch = null;
       let bestScore = -Infinity;
       
-      // Find the best matching Task tool for this sidechain
+      // Find the best matching Task tool for this sidechain block
       for (let i = 0; i < taskTools.length; i++) {
         const task = taskTools[i];
         
-        // Score based on multiple factors
+        // Score based on position - sidechain should come after Task tool result
         let score = 0;
         
-        // 1. Temporal proximity - sidechain should start after Task tool result
-        const timeDiff = sidechainStartTime - task.timestamp;
-        if (timeDiff > 0 && timeDiff < 60000) { // Within 1 minute
-          // Higher score for closer temporal proximity
-          score += (60000 - timeDiff) / 1000; // Max 60 points
-        } else if (timeDiff < 0) {
-          // Sidechain started before task result - not a match
+        // 1. Check if sidechain block starts after the Task tool result
+        if (block.startIndex > task.toolResultIndex) {
+          // Calculate proximity score - closer is better
+          const gap = block.startIndex - task.toolResultIndex;
+          if (gap < 20) { // Very close (within 20 messages)
+            score += 100 - gap * 5; // Max 100 points, decreasing with distance
+          } else if (gap < 50) { // Reasonably close
+            score += 50 - (gap - 20); // Max 50 points
+          } else {
+            score += 10; // Still possible but low score
+          }
+        } else {
+          // Sidechain starts before Task result - not a match
           continue;
         }
         
-        // 2. Check if this is the next sidechain after the Task tool
-        // (no other sidechains between this Task and this sidechain)
-        let hasIntermediateSidechain = false;
-        for (const [otherId, otherGroup] of sidechainGroups) {
-          if (otherId !== sessionId) {
-            const otherStartTime = new Date(otherGroup.firstMessageTime).getTime();
-            if (otherStartTime > task.timestamp && otherStartTime < sidechainStartTime) {
-              hasIntermediateSidechain = true;
-              break;
-            }
-          }
-        }
-        if (!hasIntermediateSidechain) {
-          score += 30; // Bonus for being the next sidechain
-        }
-        
-        // 3. Check if there's another Task tool between this Task and the sidechain
+        // 2. Check if there's another Task tool between this Task and the sidechain
         let hasIntermediateTask = false;
         for (let j = i + 1; j < taskTools.length; j++) {
-          if (taskTools[j].timestamp < sidechainStartTime) {
+          if (taskTools[j].toolResultIndex < block.startIndex) {
             hasIntermediateTask = true;
             break;
           }
         }
         if (!hasIntermediateTask) {
-          score += 20; // Bonus for no intermediate Task tools
+          score += 30; // Bonus for no intermediate Task tools
         }
         
-        // 4. Check tool result content for explicit sidechainId
-        const toolResultData = task.toolResultMsg.toolUseResult;
-        if (toolResultData && typeof toolResultData === 'object') {
-          // Check direct sidechainId
-          if (toolResultData.sidechainId === sessionId) {
-            score += 1000; // Huge bonus for explicit match
+        // 3. Check if there's another sidechain block between this Task and this sidechain
+        let hasIntermediateSidechain = false;
+        for (const [otherId, otherBlock] of sidechainGroups) {
+          if (otherId !== blockId && 
+              otherBlock.startIndex > task.toolResultIndex && 
+              otherBlock.startIndex < block.startIndex) {
+            hasIntermediateSidechain = true;
+            break;
           }
-          
-          // Check in content array
-          if (Array.isArray(toolResultData.content)) {
-            toolResultData.content.forEach(item => {
-              if (item && typeof item === 'object' && item.sidechainId === sessionId) {
-                score += 1000; // Huge bonus for explicit match
-              }
-            });
-          }
+        }
+        if (!hasIntermediateSidechain) {
+          score += 20; // Bonus for being the next sidechain
         }
         
         if (score > bestScore) {
@@ -372,18 +371,18 @@ class ClaudeHistoryViewer {
       
       // Link the sidechain to the best matching Task tool
       if (bestMatch && bestScore > 0) {
-        group.taskToolUuid = bestMatch.toolUseMsg.uuid;
-        this.sidechainMap.set(bestMatch.toolUseMsg.uuid, group.messages);
+        block.taskToolUuid = bestMatch.toolUseMsg.uuid;
+        this.sidechainMap.set(bestMatch.toolUseMsg.uuid, block.messages);
       }
     }
     
     // Store orphaned sidechains (not linked to any Task tool)
     this.orphanedSidechains = [];
-    for (const [sessionId, group] of sidechainGroups) {
-      if (!group.taskToolUuid) {
+    for (const [blockId, block] of sidechainGroups) {
+      if (!block.taskToolUuid) {
         this.orphanedSidechains.push({
-          sessionId,
-          messages: group.messages
+          blockId,
+          messages: block.messages
         });
       }
     }
