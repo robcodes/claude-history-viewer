@@ -305,6 +305,267 @@ User (tool_result) ←─────┘
 Assistant ───────────────┐       
 ```
 
+## Sidechain Relationships and Task Tool Integration
+
+### Overview
+Sidechains are sub-agent conversations spawned from the main conversation thread, typically via the Task tool. They represent independent work performed by a sub-agent with fresh context, and their results are returned to the main conversation.
+
+### Key Characteristics of Sidechains
+
+1. **Identification**: All sidechain messages have `"isSidechain": true`
+2. **Threading**: Sidechains form their own conversation thread with parentUuid relationships
+3. **First Message**: The first sidechain message has `"parentUuid": null` (not linked to main thread)
+4. **Same Session**: Sidechains share the same `sessionId` as the main conversation
+5. **Ordering**: Sidechain messages are interleaved with main thread messages in the JSONL file
+
+### Task Tool Flow
+
+The complete flow when using the Task tool involves these steps:
+
+#### 1. Main Thread: Task Tool Invocation
+```json
+{
+  "parentUuid": "3295c45a-8fd9-4ac3-b393-5b0f5565d0c8",
+  "isSidechain": false,
+  "type": "assistant",
+  "message": {
+    "content": [{
+      "type": "tool_use",
+      "id": "toolu_0115f6FVpQQoCt4jmAMQehwi",
+      "name": "Task",
+      "input": {
+        "prompt": "Your task is to click the profile avatar on fuzzycode.dev...",
+        "description": "Test clicking profile on fuzzycode.dev"
+      }
+    }]
+  },
+  "uuid": "f63f0119-70eb-4a84-ba7e-1b6e70719757"
+}
+```
+
+#### 2. Sidechain: First Message (Task Assignment)
+```json
+{
+  "parentUuid": null,  // Note: null, not linked to main thread
+  "isSidechain": true,
+  "type": "user",
+  "message": {
+    "role": "user",
+    "content": "Your task is to click the profile avatar on fuzzycode.dev..."
+  },
+  "uuid": "21c97710-2b33-4a4d-8ca1-8fad70d5ab78",
+  "timestamp": "2025-07-12T14:27:37.503Z"
+}
+```
+
+#### 3. Sidechain: Sub-agent Conversation
+Multiple messages follow in the sidechain as the sub-agent works:
+```json
+// Sub-agent response
+{
+  "parentUuid": "21c97710-2b33-4a4d-8ca1-8fad70d5ab78",
+  "isSidechain": true,
+  "type": "assistant",
+  "message": {
+    "content": [{"type": "text", "text": "I'll help you click..."}]
+  }
+}
+
+// Tool uses and results within sidechain
+{
+  "parentUuid": "cb8f7451-e0cc-4760-ade2-1475e3d414e6",
+  "isSidechain": true,
+  "type": "assistant",
+  "message": {
+    "content": [{
+      "type": "tool_use",
+      "name": "mcp__browserbase__browserbase_session_create"
+    }]
+  }
+}
+```
+
+#### 4. Sidechain: Final Summary
+The last assistant message in the sidechain typically contains a comprehensive summary:
+```json
+{
+  "parentUuid": "8d790d2b-4415-4746-9dd7-afe66b7cba0c",
+  "isSidechain": true,
+  "type": "assistant",
+  "message": {
+    "content": [{
+      "type": "text",
+      "text": "## Summary Report\n\nI successfully completed the full login flow..."
+    }]
+  },
+  "uuid": "b48da4a0-101d-42be-be09-f04d89e06377"
+}
+```
+
+#### 5. Main Thread: Task Result
+The Task tool result is returned to the main thread:
+```json
+{
+  "parentUuid": "f63f0119-70eb-4a84-ba7e-1b6e70719757",
+  "isSidechain": false,
+  "type": "user",
+  "message": {
+    "role": "user",
+    "content": [{
+      "tool_use_id": "toolu_0115f6FVpQQoCt4jmAMQehwi",
+      "type": "tool_result",
+      "content": [{"type": "text", "text": "## Summary Report\n\nI successfully completed..."}]
+    }]
+  },
+  "toolUseResult": {
+    "content": [{"type": "text", "text": "## Summary Report..."}],
+    "totalDurationMs": 180653,
+    "totalTokens": 28695,
+    "totalToolUseCount": 18,
+    "usage": {...},
+    "wasInterrupted": false
+  }
+}
+```
+
+### Important Patterns
+
+1. **No Direct Linking**: Sidechains are NOT directly linked to the main thread via parentUuid
+2. **Implicit Relationship**: The relationship is implicit through:
+   - Temporal ordering (sidechain follows Task tool use)
+   - Same sessionId
+   - Task tool_use_id matches the tool_result that returns the summary
+   
+3. **Content Duplication**: The sidechain's final summary is typically duplicated in:
+   - The last assistant message in the sidechain
+   - The tool_result content in the main thread
+   - The toolUseResult field (sometimes with additional metadata)
+
+4. **Multiple Sidechains**: A conversation can have multiple sidechains from different Task invocations
+
+### Displaying Sidechains in UI
+
+#### Recommended Approach
+
+1. **Identify Sidechain Blocks**:
+   ```javascript
+   function identifySidechains(messages) {
+     const sidechains = [];
+     let currentSidechain = null;
+     
+     for (const msg of messages) {
+       if (msg.isSidechain) {
+         if (!currentSidechain || msg.parentUuid === null) {
+           // Start of new sidechain
+           currentSidechain = {
+             id: msg.uuid,
+             startTime: msg.timestamp,
+             messages: [msg]
+           };
+           sidechains.push(currentSidechain);
+         } else {
+           currentSidechain.messages.push(msg);
+         }
+       } else if (currentSidechain) {
+         // End of sidechain
+         currentSidechain.endTime = messages[messages.indexOf(msg) - 1].timestamp;
+         currentSidechain = null;
+       }
+     }
+     return sidechains;
+   }
+   ```
+
+2. **Link Sidechains to Task Tools**:
+   ```javascript
+   function linkSidechainsToTasks(messages, sidechains) {
+     for (const sidechain of sidechains) {
+       // Find Task tool use that preceded this sidechain
+       const taskToolUse = findPrecedingTaskToolUse(messages, sidechain.startTime);
+       if (taskToolUse) {
+         sidechain.taskToolUseId = taskToolUse.toolUseId;
+         sidechain.taskDescription = taskToolUse.input.description;
+       }
+     }
+   }
+   ```
+
+3. **Display Options**:
+   - **Inline Collapsible**: Show sidechain as collapsible section after Task tool
+   - **Separate Panel**: Display sidechain in side panel when Task is selected
+   - **Modal/Popup**: Open sidechain in modal for detailed view
+   - **Summary Only**: Show only the final summary with option to expand
+
+### Edge Cases and Considerations
+
+1. **Interrupted Sidechains**: Handle cases where Task is interrupted
+2. **Empty Sidechains**: Some Tasks might not generate sidechain messages
+3. **Large Sidechains**: Performance considerations for long sub-agent conversations
+4. **Nested Tasks**: A sidechain could theoretically spawn its own sub-tasks
+5. **Error Handling**: Sidechain errors should be clearly distinguished from main thread errors
+
+### Example Implementation
+
+```javascript
+class SidechainManager {
+  constructor(messages) {
+    this.messages = messages;
+    this.sidechains = this.extractSidechains();
+  }
+  
+  extractSidechains() {
+    const sidechains = new Map();
+    let currentSidechain = null;
+    
+    this.messages.forEach((msg, index) => {
+      if (msg.isSidechain) {
+        if (!currentSidechain || msg.parentUuid === null) {
+          currentSidechain = {
+            id: crypto.randomUUID(),
+            messages: [],
+            startIndex: index,
+            startTime: msg.timestamp
+          };
+        }
+        currentSidechain.messages.push(msg);
+      } else if (currentSidechain) {
+        // Sidechain ended
+        currentSidechain.endIndex = index - 1;
+        currentSidechain.endTime = this.messages[index - 1].timestamp;
+        
+        // Find associated Task tool
+        const taskTool = this.findAssociatedTaskTool(currentSidechain);
+        if (taskTool) {
+          sidechains.set(taskTool.id, currentSidechain);
+        }
+        
+        currentSidechain = null;
+      }
+    });
+    
+    return sidechains;
+  }
+  
+  findAssociatedTaskTool(sidechain) {
+    // Look backwards from sidechain start for Task tool use
+    for (let i = sidechain.startIndex - 1; i >= 0; i--) {
+      const msg = this.messages[i];
+      if (msg.type === 'assistant' && msg.message.content) {
+        const toolUse = msg.message.content.find(
+          c => c.type === 'tool_use' && c.name === 'Task'
+        );
+        if (toolUse) return toolUse;
+      }
+    }
+    return null;
+  }
+  
+  getSidechainForTaskTool(toolUseId) {
+    return this.sidechains.get(toolUseId);
+  }
+}
+```
+
 ## Token Usage and Metadata
 
 ### Token Usage Tracking

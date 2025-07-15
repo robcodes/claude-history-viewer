@@ -11,5 +11,8 @@
   "license": "ISC",
   "dependencies": {
     "@types/node": "^22.13.11"
+  },
+  "devDependencies": {
+    "jsdom": "^26.1.0"
   }
 }

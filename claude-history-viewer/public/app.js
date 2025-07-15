@@ -226,30 +226,183 @@ class ClaudeHistoryViewer {
     this.messageMap.clear();
     this.sidechainMap.clear();
     
+    // First pass: build message map and group sidechains by sessionId
+    const sidechainGroups = new Map();
+    
     this.currentConversation.messages.forEach(msg => {
       this.messageMap.set(msg.uuid, msg);
       
       if (msg.isSidechain) {
         const sessionId = msg.sessionId;
-        if (!this.sidechainMap.has(sessionId)) {
-          this.sidechainMap.set(sessionId, []);
+        if (!sidechainGroups.has(sessionId)) {
+          sidechainGroups.set(sessionId, {
+            messages: [],
+            firstMessageTime: msg.timestamp,
+            taskToolUuid: null
+          });
         }
-        this.sidechainMap.get(sessionId).push(msg);
+        sidechainGroups.get(sessionId).messages.push(msg);
       }
     });
     
-    // Mark messages that have children
-    this.currentConversation.messages.forEach(msg => {
+    // Sort sidechain messages by timestamp within each group
+    for (const [sessionId, group] of sidechainGroups) {
+      group.messages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    }
+    
+    // Second pass: link Task tools to sidechains
+    // We'll track all Task tools and their results first
+    const taskTools = [];
+    
+    this.currentConversation.messages.forEach((msg, index) => {
+      if (msg.type === 'assistant' && this.hasToolUse(msg)) {
+        const toolUse = this.getToolUseContent(msg);
+        if (toolUse && toolUse.name === 'Task') {
+          // Find the corresponding tool result
+          const toolUseId = this.getToolUseId(msg);
+          let toolResultMsg = null;
+          let toolResultIndex = -1;
+          
+          // Look for the tool result in subsequent messages
+          for (let i = index + 1; i < this.currentConversation.messages.length; i++) {
+            const nextMsg = this.currentConversation.messages[i];
+            if (nextMsg.type === 'user' && this.hasToolResult(nextMsg, toolUseId)) {
+              toolResultMsg = nextMsg;
+              toolResultIndex = i;
+              break;
+            }
+          }
+          
+          if (toolResultMsg) {
+            taskTools.push({
+              toolUseMsg: msg,
+              toolResultMsg: toolResultMsg,
+              toolUseIndex: index,
+              toolResultIndex: toolResultIndex,
+              timestamp: new Date(toolResultMsg.timestamp).getTime()
+            });
+          }
+        }
+      }
+      
+      // Mark messages that have children
       if (msg.parentUuid && this.messageMap.has(msg.parentUuid)) {
         const parent = this.messageMap.get(msg.parentUuid);
         parent.hasChildren = true;
       }
     });
+    
+    // Sort task tools by timestamp
+    taskTools.sort((a, b) => a.timestamp - b.timestamp);
+    
+    // Now link sidechains to Task tools using improved logic
+    for (const [sessionId, group] of sidechainGroups) {
+      const sidechainStartTime = new Date(group.firstMessageTime).getTime();
+      let bestMatch = null;
+      let bestScore = -Infinity;
+      
+      // Find the best matching Task tool for this sidechain
+      for (let i = 0; i < taskTools.length; i++) {
+        const task = taskTools[i];
+        
+        // Score based on multiple factors
+        let score = 0;
+        
+        // 1. Temporal proximity - sidechain should start after Task tool result
+        const timeDiff = sidechainStartTime - task.timestamp;
+        if (timeDiff > 0 && timeDiff < 60000) { // Within 1 minute
+          // Higher score for closer temporal proximity
+          score += (60000 - timeDiff) / 1000; // Max 60 points
+        } else if (timeDiff < 0) {
+          // Sidechain started before task result - not a match
+          continue;
+        }
+        
+        // 2. Check if this is the next sidechain after the Task tool
+        // (no other sidechains between this Task and this sidechain)
+        let hasIntermediateSidechain = false;
+        for (const [otherId, otherGroup] of sidechainGroups) {
+          if (otherId !== sessionId) {
+            const otherStartTime = new Date(otherGroup.firstMessageTime).getTime();
+            if (otherStartTime > task.timestamp && otherStartTime < sidechainStartTime) {
+              hasIntermediateSidechain = true;
+              break;
+            }
+          }
+        }
+        if (!hasIntermediateSidechain) {
+          score += 30; // Bonus for being the next sidechain
+        }
+        
+        // 3. Check if there's another Task tool between this Task and the sidechain
+        let hasIntermediateTask = false;
+        for (let j = i + 1; j < taskTools.length; j++) {
+          if (taskTools[j].timestamp < sidechainStartTime) {
+            hasIntermediateTask = true;
+            break;
+          }
+        }
+        if (!hasIntermediateTask) {
+          score += 20; // Bonus for no intermediate Task tools
+        }
+        
+        // 4. Check tool result content for explicit sidechainId
+        const toolResultData = task.toolResultMsg.toolUseResult;
+        if (toolResultData && typeof toolResultData === 'object') {
+          // Check direct sidechainId
+          if (toolResultData.sidechainId === sessionId) {
+            score += 1000; // Huge bonus for explicit match
+          }
+          
+          // Check in content array
+          if (Array.isArray(toolResultData.content)) {
+            toolResultData.content.forEach(item => {
+              if (item && typeof item === 'object' && item.sidechainId === sessionId) {
+                score += 1000; // Huge bonus for explicit match
+              }
+            });
+          }
+        }
+        
+        if (score > bestScore) {
+          bestScore = score;
+          bestMatch = task;
+        }
+      }
+      
+      // Link the sidechain to the best matching Task tool
+      if (bestMatch && bestScore > 0) {
+        group.taskToolUuid = bestMatch.toolUseMsg.uuid;
+        this.sidechainMap.set(bestMatch.toolUseMsg.uuid, group.messages);
+      }
+    }
+    
+    // Store orphaned sidechains (not linked to any Task tool)
+    this.orphanedSidechains = [];
+    for (const [sessionId, group] of sidechainGroups) {
+      if (!group.taskToolUuid) {
+        this.orphanedSidechains.push({
+          sessionId,
+          messages: group.messages
+        });
+      }
+    }
   }
   
   renderConversation() {
     const conv = this.currentConversation;
     const mainMessages = conv.messages.filter(msg => !msg.isSidechain);
+    
+    // Debug information about sidechains
+    const sidechainCount = conv.messages.filter(msg => msg.isSidechain).length;
+    const linkedSidechainCount = this.sidechainMap.size;
+    const orphanedSidechainCount = this.orphanedSidechains?.length || 0;
+    
+    console.log(`🔍 Sidechain Debug:
+      Total sidechains: ${sidechainCount}
+      Linked sidechains: ${linkedSidechainCount}
+      Orphaned sidechains: ${orphanedSidechainCount}
+      Sidechain map:`, this.sidechainMap);
     
     this.elements.conversationView.innerHTML = `
       <div class="conversation-header">
@@ -259,6 +412,7 @@ class ClaudeHistoryViewer {
           <span>📅 Created: ${this.formatDate(conv.created)}</span>
           <span>💬 ${conv.messageCount} messages</span>
           <span>🪙 ${this.formatTokens(conv.totalTokens)} tokens</span>
+          ${sidechainCount > 0 ? `<span>🔀 ${sidechainCount} sidechain messages (${linkedSidechainCount} linked)</span>` : ''}
         </div>
         <div class="file-path-container">
           <span class="file-path-label">📄 File:</span>
@@ -269,6 +423,7 @@ class ClaudeHistoryViewer {
       </div>
       <div class="messages-container ${this.showDeveloperInfo ? 'show-thread-lines' : ''}">
         ${this.renderMessageThread(mainMessages)}
+        ${this.renderOrphanedSidechains()}
       </div>
     `;
     
@@ -317,28 +472,19 @@ class ClaudeHistoryViewer {
         }
         
         if (toolResultMsg) {
+          // Check if this tool use has an associated sidechain
+          const sidechainMessages = this.sidechainMap.get(msg.uuid);
+          
           groups.push({
             type: 'tool-flow',
             toolUse: msg,
             toolResult: toolResultMsg,
-            messages: messages.slice(i, j + 1)
+            messages: messages.slice(i, j + 1),
+            sidechainMessages: sidechainMessages || null
           });
           i = j + 1;
           continue;
         }
-      }
-      
-      // Check if this spawns a sidechain
-      const sidechainId = this.getSpawnedSidechainId(msg);
-      if (sidechainId && this.sidechainMap.has(sidechainId)) {
-        groups.push({
-          type: 'sidechain',
-          spawningMessage: msg,
-          sidechainMessages: this.sidechainMap.get(sidechainId),
-          sidechainId
-        });
-        i++;
-        continue;
       }
       
       // Regular message
@@ -353,7 +499,7 @@ class ClaudeHistoryViewer {
   }
   
   renderToolFlow(group, level) {
-    const { toolUse, toolResult } = group;
+    const { toolUse, toolResult, sidechainMessages } = group;
     const toolUseContent = this.getToolUseContent(toolUse);
     const toolResultContent = this.getToolResultContent(toolResult);
     const toolResultData = toolResult.toolUseResult; // Get the additional tool result data
@@ -367,6 +513,7 @@ class ClaudeHistoryViewer {
     }
     
     const isError = toolResultContent?.is_error;
+    const isTaskTool = toolUseContent.name === 'Task';
     
     return `
       <div class="tool-flow-group" data-level="${level}">
@@ -386,11 +533,12 @@ class ClaudeHistoryViewer {
           ${this.renderAssistantText(toolUse)}
           
           <!-- Tool Use Card -->
-          <div class="tool-use-card ${isError ? 'has-error' : ''}">
+          <div class="tool-use-card ${isError ? 'has-error' : ''} ${isTaskTool && sidechainMessages ? 'has-sidechain' : ''}">
             <div class="tool-use-header">
               <span class="tool-icon">${this.getToolIcon(toolUseContent.name)}</span>
               <span class="tool-name">${toolUseContent.name}</span>
               <span class="tool-status">${isError ? '❌ Failed' : '✅ Success'}</span>
+              ${isTaskTool && sidechainMessages ? '<span class="sidechain-indicator">🔀 Has sub-agent task</span>' : ''}
             </div>
             
             <div class="tool-use-body collapsible-content">
@@ -417,33 +565,72 @@ class ClaudeHistoryViewer {
           ${this.renderThinkingBlock(toolUse)}
           ${this.renderMessageMetadata(toolUse, 'assistant')}
         </div>
+        
+        ${sidechainMessages ? this.renderSidechainSection(sidechainMessages, level + 1) : ''}
       </div>
     `;
   }
   
-  renderSidechain(group, level) {
-    const { spawningMessage, sidechainMessages, sidechainId } = group;
+  renderSidechainSection(sidechainMessages, level) {
+    if (!sidechainMessages || sidechainMessages.length === 0) return '';
+    
+    // Extract summary information from sidechain messages
+    const firstMessage = sidechainMessages[0];
+    const lastMessage = sidechainMessages[sidechainMessages.length - 1];
+    const sessionId = firstMessage.sessionId;
+    
+    // Calculate token usage for the sidechain
+    let sidechainTokens = 0;
+    sidechainMessages.forEach(msg => {
+      if (msg.message?.usage) {
+        sidechainTokens += (msg.message.usage.input_tokens || 0) + (msg.message.usage.output_tokens || 0);
+      }
+    });
     
     return `
-      <div class="sidechain-group" data-level="${level}">
-        <!-- Spawning message -->
-        ${this.renderMessage(spawningMessage, level)}
-        
-        <!-- Sidechain container -->
-        <div class="sidechain-container collapsible">
-          <div class="sidechain-header">
-            <span class="sidechain-icon">🔀</span>
-            <span class="sidechain-title">Sub-Agent Task</span>
-            <span class="sidechain-meta">${sidechainMessages.length} messages</span>
-            <button class="collapse-toggle" aria-label="Toggle sidechain">
-              <span class="collapse-icon">▼</span>
-            </button>
-          </div>
-          
-          <div class="sidechain-messages collapsible-content">
-            ${this.renderMessageThread(sidechainMessages, level + 1)}
-          </div>
+      <div class="sidechain-container collapsible collapsed" data-session-id="${sessionId}">
+        <div class="sidechain-header">
+          <span class="sidechain-icon">🔀</span>
+          <span class="sidechain-title">Sub-Agent Task</span>
+          <span class="sidechain-meta">
+            <span class="sidechain-stat">${sidechainMessages.length} messages</span>
+            <span class="sidechain-stat">🪙 ${this.formatTokens(sidechainTokens)}</span>
+          </span>
+          <button class="collapse-toggle" aria-label="Toggle sidechain">
+            <span class="collapse-icon">▶</span>
+          </button>
         </div>
+        
+        <div class="sidechain-messages collapsible-content">
+          <div class="sidechain-info">
+            <div class="sidechain-detail">
+              <span class="detail-label">Session ID:</span>
+              <span class="detail-value">${sessionId}</span>
+            </div>
+            <div class="sidechain-detail">
+              <span class="detail-label">Duration:</span>
+              <span class="detail-value">${this.formatDuration(firstMessage.timestamp, lastMessage.timestamp)}</span>
+            </div>
+          </div>
+          ${this.renderMessageThread(sidechainMessages, level + 1)}
+        </div>
+      </div>
+    `;
+  }
+  
+  renderOrphanedSidechains() {
+    if (!this.orphanedSidechains || this.orphanedSidechains.length === 0) return '';
+    
+    return `
+      <div class="orphaned-sidechains-section">
+        <div class="orphaned-header">
+          <span class="orphaned-icon">⚠️</span>
+          <span class="orphaned-title">Unlinked Sub-Agent Tasks</span>
+          <span class="orphaned-description">These sub-agent conversations could not be linked to a specific Task tool</span>
+        </div>
+        ${this.orphanedSidechains.map(({ sessionId, messages }) => 
+          this.renderSidechainSection(messages, 0)
+        ).join('')}
       </div>
     `;
   }
@@ -673,6 +860,24 @@ class ClaudeHistoryViewer {
         const icon = btn.querySelector('.collapse-icon');
         
         container.classList.toggle('collapsed');
+        
+        // Update icon based on container type and state
+        if (container.classList.contains('sidechain-container')) {
+          icon.textContent = container.classList.contains('collapsed') ? '▶' : '▼';
+        } else {
+          icon.textContent = container.classList.contains('collapsed') ? '▶' : '▼';
+        }
+      });
+    });
+    
+    // Also handle clicks on sidechain headers
+    document.querySelectorAll('.sidechain-header').forEach(header => {
+      header.addEventListener('click', (e) => {
+        if (e.target.closest('.collapse-toggle')) return; // Already handled
+        const container = header.closest('.sidechain-container');
+        const icon = container.querySelector('.collapse-icon');
+        
+        container.classList.toggle('collapsed');
         icon.textContent = container.classList.contains('collapsed') ? '▶' : '▼';
       });
     });
@@ -709,24 +914,20 @@ class ClaudeHistoryViewer {
     return msg.message.content.find(item => item.type === 'tool_result');
   }
   
-  getSpawnedSidechainId(msg) {
-    // Check if this message has a Task tool use that spawns a sidechain
-    if (!msg.message?.content || !Array.isArray(msg.message.content)) return null;
+  formatDuration(startTime, endTime) {
+    const start = new Date(startTime).getTime();
+    const end = new Date(endTime).getTime();
+    const duration = end - start;
     
-    const taskToolUse = msg.message.content.find(item => 
-      item.type === 'tool_use' && item.name === 'Task'
-    );
-    
-    if (!taskToolUse) return null;
-    
-    // Look for the corresponding tool result in the next messages
-    // that might contain the sidechain ID
-    // This is a simplified approach - in reality, we'd need to trace
-    // through the messages to find the spawned sidechain
-    
-    // For now, return null as we'd need more complex logic to properly
-    // link Task tool uses to their spawned sidechains
-    return null;
+    if (duration < 1000) {
+      return `${duration}ms`;
+    } else if (duration < 60000) {
+      return `${Math.round(duration / 1000)}s`;
+    } else if (duration < 3600000) {
+      return `${Math.round(duration / 60000)}m`;
+    } else {
+      return `${Math.round(duration / 3600000)}h`;
+    }
   }
   
   getToolIcon(toolName) {
@@ -755,152 +956,420 @@ class ClaudeHistoryViewer {
   formatToolResultContent(toolResult, toolResultData) {
     if (!toolResult) return 'No result';
     
-    let html = '';
-    
-    // First, show the main content
     let content = toolResult.content || '';
     
-    // If content is an object (either "[object Object]" string or actual object), 
-    // try to extract from it or toolResultData
-    if (content === '[object Object]' || typeof content === 'object') {
-      // If content is actually the toolResultData object
-      if (typeof content === 'object' && content.content) {
-        toolResultData = content;
-      }
-      
-      // Now extract from toolResultData
-      if (toolResultData && toolResultData.content) {
-        if (Array.isArray(toolResultData.content)) {
-          // Extract text from content array (Task tool results often have this structure)
-          const textContent = toolResultData.content
-            .filter(item => item.type === 'text')
-            .map(item => item.text)
-            .join('\n\n');
-          if (textContent) {
-            content = textContent;
-          }
-        } else if (typeof toolResultData.content === 'string') {
-          content = toolResultData.content;
-        }
-      }
-    }
+    // First, handle the primary content with smart object detection
+    const processedContent = this.processToolResultContent(content, toolResultData);
     
-    // Check if content is JSON
-    try {
-      const parsed = JSON.parse(content);
-      html += `<pre class="code-block">${this.escapeHtml(JSON.stringify(parsed, null, 2))}</pre>`;
-    } catch {
-      // Not JSON, format as text
-      html += this.formatLongContent(content, 1000);
-    }
+    // Format the main content based on its type and structure
+    let html = this.formatProcessedContent(processedContent);
     
-    // If there's additional toolResultData, display it
-    if (toolResultData && typeof toolResultData === 'object') {
-      html += this.formatToolResultData(toolResultData);
+    // Add additional structured data if available and different from main content
+    if (toolResultData && typeof toolResultData === 'object' && toolResultData !== null) {
+      const additionalData = this.extractAdditionalData(toolResultData, processedContent);
+      if (additionalData) {
+        html += additionalData;
+      }
     }
     
     return html;
   }
   
-  formatToolResultData(data) {
-    // Handle different types of tool result data
-    let html = '<div class="tool-result-metadata">';
+  processToolResultContent(content, toolResultData) {
+    // Detect if content is a stringified object
+    if (this.isStringifiedObject(content)) {
+      return this.resolveStringifiedObject(content, toolResultData);
+    }
     
-    // Check for Task tool specific fields
-    if (data.summary || data.sidechainId) {
-      html += '<div class="task-result-summary">';
-      
-      if (data.summary) {
-        html += `<div class="summary-item"><strong>Summary:</strong> ${this.escapeHtml(data.summary)}</div>`;
-      }
-      
-      if (data.sidechainId) {
-        html += `<div class="summary-item"><strong>Sub-agent Session:</strong> ${data.sidechainId}</div>`;
-      }
-      
-      if (data.messagesInSidechain) {
-        html += `<div class="summary-item"><strong>Messages in sub-task:</strong> ${data.messagesInSidechain}</div>`;
-      }
-      
-      if (data.tokensUsed) {
-        html += `<div class="summary-item"><strong>Tokens used:</strong> ${this.formatTokens(data.tokensUsed)}</div>`;
-      }
-      
-      if (data.details && typeof data.details === 'object') {
-        html += '<div class="task-details">';
-        html += '<strong>Details:</strong>';
-        html += `<pre class="code-block">${this.escapeHtml(JSON.stringify(data.details, null, 2))}</pre>`;
-        html += '</div>';
-      }
-      
-      html += '</div>';
+    // Handle content that's already an object
+    if (typeof content === 'object' && content !== null) {
+      return this.processObjectContent(content);
     }
-    // Handle Bash tool results
-    else if ('stdout' in data || 'stderr' in data) {
-      if (data.stdout) {
-        html += '<div class="bash-output">';
-        html += '<div class="output-label">Standard Output:</div>';
-        html += `<pre class="code-block">${this.escapeHtml(data.stdout)}</pre>`;
-        html += '</div>';
-      }
-      
-      if (data.stderr) {
-        html += '<div class="bash-error">';
-        html += '<div class="output-label">Standard Error:</div>';
-        html += `<pre class="code-block error">${this.escapeHtml(data.stderr)}</pre>`;
-        html += '</div>';
-      }
-      
-      if (data.interrupted) {
-        html += '<div class="bash-interrupted">⚠️ Process was interrupted</div>';
-      }
+    
+    // Handle string content that might contain structured data
+    if (typeof content === 'string') {
+      return this.processStringContent(content);
     }
-    // Handle TodoWrite tool results
-    else if (data.oldTodos || data.newTodos) {
-      html += '<div class="todo-changes">';
-      
-      if (data.oldTodos && data.oldTodos.length > 0) {
-        html += '<div class="todos-section">';
-        html += '<strong>Previous Todos:</strong>';
-        html += '<ul class="todo-list old">';
-        data.oldTodos.forEach(todo => {
-          html += `<li class="todo-item ${todo.status}">${this.escapeHtml(todo.content)} (${todo.priority})</li>`;
-        });
-        html += '</ul>';
-        html += '</div>';
-      }
-      
-      if (data.newTodos && data.newTodos.length > 0) {
-        html += '<div class="todos-section">';
-        html += '<strong>Updated Todos:</strong>';
-        html += '<ul class="todo-list new">';
-        data.newTodos.forEach(todo => {
-          html += `<li class="todo-item ${todo.status}">${this.escapeHtml(todo.content)} (${todo.priority})</li>`;
-        });
-        html += '</ul>';
-        html += '</div>';
-      }
-      
-      html += '</div>';
+    
+    return {
+      type: 'unknown',
+      displayContent: String(content || 'No content'),
+      warning: 'Unknown content type'
+    };
+  }
+  
+  isStringifiedObject(content) {
+    if (typeof content !== 'string') return false;
+    
+    // Check for various forms of stringified objects
+    const patterns = [
+      /^\[object Object\]$/,
+      /^\[object [A-Z][a-zA-Z]*\]$/,
+      /^\[object [a-zA-Z]+\]$/,
+      /^\{.*\}$/s,  // JSON-like
+      /^\[.*\]$/s   // Array-like
+    ];
+    
+    return patterns.some(pattern => pattern.test(content.trim()));
+  }
+  
+  resolveStringifiedObject(content, toolResultData) {
+    // If we have structured data, use it to resolve the object
+    if (toolResultData && typeof toolResultData === 'object' && toolResultData !== null) {
+      return this.processObjectContent(toolResultData);
     }
-    // Generic object display
-    else {
-      // Only show additional data if it's not just the content we already displayed
-      const hasMoreThanContent = Object.keys(data).some(key => key !== 'content');
-      if (hasMoreThanContent) {
-        html += '<div class="generic-result-data">';
-        html += '<strong>Additional Data:</strong>';
-        // Create a copy without the content field since we already displayed it
-        const dataWithoutContent = { ...data };
-        delete dataWithoutContent.content;
-        html += `<pre class="code-block">${this.escapeHtml(JSON.stringify(dataWithoutContent, null, 2))}</pre>`;
-        html += '</div>';
+    
+    // Try to parse if it looks like JSON
+    if (content.startsWith('{') || content.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(content);
+        return this.processObjectContent(parsed);
+      } catch {
+        // Not valid JSON, treat as malformed
       }
     }
     
-    html += '</div>';
+    return {
+      type: 'error',
+      displayContent: 'Unable to resolve object content',
+      warning: 'Content appears to be a stringified object but no structured data is available to resolve it'
+    };
+  }
+  
+  processObjectContent(obj) {
+    if (Array.isArray(obj)) {
+      return this.processArrayContent(obj);
+    }
+    
+    // Detect specific patterns and structures
+    if (this.isTaskLikeResult(obj)) {
+      return this.processTaskResult(obj);
+    }
+    
+    if (this.isCommandLikeResult(obj)) {
+      return this.processCommandResult(obj);
+    }
+    
+    if (this.isFileLikeResult(obj)) {
+      return this.processFileResult(obj);
+    }
+    
+    // Generic object processing
+    return this.processGenericObject(obj);
+  }
+  
+  processArrayContent(arr) {
+    // Check if it's a content array with text objects (Task-like)
+    if (arr.every(item => item && typeof item === 'object' && item.type === 'text')) {
+      const textContent = arr.map(item => item.text).join('\n\n');
+      return {
+        type: 'text',
+        displayContent: textContent,
+        metadata: { source: 'content-array', itemCount: arr.length }
+      };
+    }
+    
+    // Mixed array content
+    const textItems = arr.filter(item => item && typeof item === 'object' && item.type === 'text');
+    const otherItems = arr.filter(item => !textItems.includes(item));
+    
+    if (textItems.length > 0) {
+      const textContent = textItems.map(item => item.text).join('\n\n');
+      return {
+        type: 'mixed-array',
+        displayContent: textContent,
+        metadata: { 
+          textItems: textItems.length, 
+          otherItems: otherItems.length,
+          additionalData: otherItems.length > 0 ? otherItems : null
+        }
+      };
+    }
+    
+    return {
+      type: 'array',
+      displayContent: JSON.stringify(arr, null, 2),
+      metadata: { itemCount: arr.length, itemTypes: [...new Set(arr.map(item => typeof item))] }
+    };
+  }
+  
+  processStringContent(content) {
+    // Try to parse as JSON
+    try {
+      const parsed = JSON.parse(content);
+      return this.processObjectContent(parsed);
+    } catch {
+      // Not JSON, treat as plain text
+      return {
+        type: 'text',
+        displayContent: content
+      };
+    }
+  }
+  
+  isTaskLikeResult(obj) {
+    return obj && (
+      (Array.isArray(obj.content) && obj.content.some(item => item && item.type === 'text')) ||
+      obj.summary || obj.sidechainId
+    );
+  }
+  
+  isCommandLikeResult(obj) {
+    return obj && (obj.stdout !== undefined || obj.stderr !== undefined || obj.exitCode !== undefined);
+  }
+  
+  isFileLikeResult(obj) {
+    return obj && (obj.filename || obj.path || obj.size !== undefined || obj.modified);
+  }
+  
+  processTaskResult(obj) {
+    let mainContent = '';
+    let metadata = {};
+    
+    // Extract main content
+    if (Array.isArray(obj.content)) {
+      const textContent = obj.content
+        .filter(item => item && item.type === 'text')
+        .map(item => item.text)
+        .join('\n\n');
+      mainContent = textContent || 'No text content found';
+      metadata.contentItems = obj.content.length;
+    } else if (obj.content) {
+      mainContent = String(obj.content);
+    }
+    
+    // Collect task-specific metadata
+    ['summary', 'sidechainId', 'messagesInSidechain', 'tokensUsed', 'details'].forEach(key => {
+      if (obj[key] !== undefined) {
+        metadata[key] = obj[key];
+      }
+    });
+    
+    return {
+      type: 'task-result',
+      displayContent: mainContent,
+      metadata: metadata
+    };
+  }
+  
+  processCommandResult(obj) {
+    const parts = [];
+    const metadata = {};
+    
+    if (obj.stdout) {
+      parts.push({ type: 'stdout', content: obj.stdout });
+    }
+    if (obj.stderr) {
+      parts.push({ type: 'stderr', content: obj.stderr });
+    }
+    
+    ['exitCode', 'interrupted', 'timeout', 'command'].forEach(key => {
+      if (obj[key] !== undefined) {
+        metadata[key] = obj[key];
+      }
+    });
+    
+    return {
+      type: 'command-result',
+      displayContent: parts,
+      metadata: metadata
+    };
+  }
+  
+  processFileResult(obj) {
+    let mainContent = '';
+    const metadata = {};
+    
+    // Extract file content if available
+    if (obj.content) {
+      mainContent = String(obj.content);
+    } else if (obj.data) {
+      mainContent = String(obj.data);
+    }
+    
+    // Collect file metadata
+    ['filename', 'path', 'size', 'modified', 'type', 'encoding'].forEach(key => {
+      if (obj[key] !== undefined) {
+        metadata[key] = obj[key];
+      }
+    });
+    
+    return {
+      type: 'file-result',
+      displayContent: mainContent,
+      metadata: metadata
+    };
+  }
+  
+  processGenericObject(obj) {
+    // Separate important data from metadata
+    const importantKeys = ['content', 'data', 'result', 'output', 'value', 'message', 'text'];
+    const metadataKeys = ['id', 'uuid', 'timestamp', 'version', 'type', 'status', 'meta', 'metadata'];
+    
+    let mainContent = '';
+    const metadata = {};
+    const additionalData = {};
+    
+    // Extract main content from important keys
+    for (const key of importantKeys) {
+      if (obj[key] !== undefined) {
+        const value = obj[key];
+        if (typeof value === 'string' || typeof value === 'number') {
+          mainContent = String(value);
+          break;
+        } else if (typeof value === 'object') {
+          mainContent = JSON.stringify(value, null, 2);
+          break;
+        }
+      }
+    }
+    
+    // Collect metadata and additional data
+    Object.entries(obj).forEach(([key, value]) => {
+      if (metadataKeys.includes(key.toLowerCase())) {
+        metadata[key] = value;
+      } else if (!importantKeys.includes(key)) {
+        additionalData[key] = value;
+      }
+    });
+    
+    return {
+      type: 'generic-object',
+      displayContent: mainContent || JSON.stringify(obj, null, 2),
+      metadata: Object.keys(metadata).length > 0 ? metadata : null,
+      additionalData: Object.keys(additionalData).length > 0 ? additionalData : null,
+      warning: !mainContent ? 'No recognizable content field found' : null
+    };
+  }
+  
+  formatProcessedContent(processedContent) {
+    let html = '';
+    
+    // Add warning if present
+    if (processedContent.warning) {
+      html += `<div class="content-warning">⚠️ ${this.escapeHtml(processedContent.warning)}</div>`;
+    }
+    
+    // Format based on content type
+    switch (processedContent.type) {
+      case 'text':
+        html += this.formatLongContent(processedContent.displayContent, 1000);
+        break;
+        
+      case 'command-result':
+        html += this.formatCommandOutput(processedContent.displayContent);
+        break;
+        
+      case 'task-result':
+        html += this.formatLongContent(processedContent.displayContent, 1000);
+        break;
+        
+      case 'file-result':
+        if (processedContent.displayContent) {
+          html += this.formatLongContent(processedContent.displayContent, 1000);
+        } else {
+          html += '<div class="no-content">File metadata only - no content to display</div>';
+        }
+        break;
+        
+      case 'mixed-array':
+        html += this.formatLongContent(processedContent.displayContent, 1000);
+        if (processedContent.metadata.additionalData) {
+          html += this.formatCollapsibleSection('Additional Array Items', 
+            JSON.stringify(processedContent.metadata.additionalData, null, 2));
+        }
+        break;
+        
+      case 'array':
+      case 'generic-object':
+        html += `<pre class="code-block">${this.escapeHtml(processedContent.displayContent)}</pre>`;
+        break;
+        
+      case 'error':
+      case 'unknown':
+      default:
+        html += `<div class="content-error">${this.escapeHtml(processedContent.displayContent)}</div>`;
+        break;
+    }
+    
+    // Add metadata section if present
+    if (processedContent.metadata) {
+      html += this.formatMetadataSection(processedContent.metadata);
+    }
+    
     return html;
   }
+  
+  formatCommandOutput(parts) {
+    if (!Array.isArray(parts)) return '';
+    
+    let html = '';
+    
+    parts.forEach(part => {
+      if (part.type === 'stdout' && part.content) {
+        html += '<div class="command-stdout">';
+        html += '<div class="output-label">Standard Output:</div>';
+        html += this.formatLongContent(part.content, 1000);
+        html += '</div>';
+      } else if (part.type === 'stderr' && part.content) {
+        html += '<div class="command-stderr">';
+        html += '<div class="output-label error">Standard Error:</div>';
+        html += `<pre class="code-block error">${this.escapeHtml(part.content)}</pre>`;
+        html += '</div>';
+      }
+    });
+    
+    return html;
+  }
+  
+  formatMetadataSection(metadata) {
+    const items = Object.entries(metadata)
+      .filter(([key, value]) => value !== null && value !== undefined)
+      .map(([key, value]) => {
+        const displayValue = typeof value === 'object' 
+          ? JSON.stringify(value, null, 2)
+          : String(value);
+        return `<div class="metadata-item"><strong>${this.escapeHtml(key)}:</strong> ${this.escapeHtml(displayValue)}</div>`;
+      });
+    
+    if (items.length === 0) return '';
+    
+    return this.formatCollapsibleSection('Metadata', items.join(''));
+  }
+  
+  formatCollapsibleSection(title, content) {
+    const sectionId = 'section-' + Math.random().toString(36).substr(2, 9);
+    
+    return `
+      <div class="collapsible-section" id="${sectionId}">
+        <div class="section-header" onclick="this.parentElement.classList.toggle('expanded')">
+          <span class="section-toggle">▶</span>
+          <span class="section-title">${this.escapeHtml(title)}</span>
+        </div>
+        <div class="section-content">
+          ${content}
+        </div>
+      </div>
+    `;
+  }
+  
+  extractAdditionalData(toolResultData, processedContent) {
+    // Don't show additional data if it was already used in main content
+    if (processedContent.type === 'task-result' || 
+        processedContent.type === 'command-result' || 
+        processedContent.type === 'file-result') {
+      return null; // These types already incorporate all relevant data
+    }
+    
+    // For generic objects, show additional structured info
+    if (processedContent.additionalData) {
+      return this.formatCollapsibleSection('Additional Data', 
+        `<pre class="code-block">${this.escapeHtml(JSON.stringify(processedContent.additionalData, null, 2))}</pre>`);
+    }
+    
+    return null;
+  }
+  
   
   scrollToMessage(uuid) {
     const element = document.querySelector(`[data-uuid="${uuid}"]`);

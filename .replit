@@ -1,5 +1,5 @@
 entrypoint = "claude-history-viewer/bin/cli.js"
-modules = ["nodejs-22"]
+modules = ["nodejs-22", "python-3.11"]
 hidden = [".config", "package-lock.json"]
 
 [gitHubImport]
@@ -7,6 +7,7 @@ requiredFiles = [".replit", "replit.nix", "package.json", "package-lock.json"]
 
 [nix]
 channel = "stable-24_11"
+packages = ["jq"]
 
 [unitTest]
 language = "nodejs"
@@ -22,6 +23,16 @@ externalPort = 80
 exposeLocalhost = true
 
 [[ports]]
+localPort = 3456
+externalPort = 3001
+exposeLocalhost = true
+
+[[ports]]
 localPort = 3457
 externalPort = 3000
+exposeLocalhost = true
+
+[[ports]]
+localPort = 3458
+externalPort = 3002
 exposeLocalhost = true

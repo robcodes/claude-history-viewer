@@ -823,6 +823,14 @@ body {
   border-radius: 10px;
   margin: 1rem 0 1rem 2rem;
   overflow: hidden;
+  transition: all 0.3s ease;
+  position: relative;
+  box-shadow: 0 2px 8px rgba(13, 148, 136, 0.1);
+}
+
+.sidechain-container.collapsed {
+  background-color: rgba(240, 253, 250, 0.5);
+  box-shadow: 0 1px 3px rgba(13, 148, 136, 0.05);
 }
 
 .sidechain-header {
@@ -833,24 +841,172 @@ body {
   background-color: rgba(255, 255, 255, 0.7);
   border-bottom: 1px solid var(--sidechain-border);
   cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.sidechain-header:hover {
+  background-color: rgba(255, 255, 255, 0.9);
 }
 
 .sidechain-icon {
   font-size: 1.25rem;
+  animation: rotate 3s linear infinite;
+  animation-play-state: paused;
+}
+
+.sidechain-container:not(.collapsed) .sidechain-icon {
+  animation-play-state: running;
+}
+
+@keyframes rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .sidechain-title {
   font-weight: 600;
   flex: 1;
+  color: var(--text-primary);
 }
 
 .sidechain-meta {
+  display: flex;
+  gap: 1rem;
   font-size: 0.875rem;
   color: var(--text-secondary);
 }
 
+.sidechain-stat {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
 .sidechain-messages {
   padding: 1rem;
+  max-height: 600px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--sidechain-border) transparent;
+}
+
+.sidechain-messages::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidechain-messages::-webkit-scrollbar-thumb {
+  background-color: var(--sidechain-border);
+  border-radius: 3px;
+}
+
+.sidechain-info {
+  display: flex;
+  gap: 1.5rem;
+  padding: 0.75rem;
+  background-color: rgba(255, 255, 255, 0.5);
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  font-size: 0.875rem;
+}
+
+.sidechain-detail {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.detail-label {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.detail-value {
+  color: var(--text-primary);
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 0.875rem;
+}
+
+/* Task Tool with Sidechain */
+.tool-use-card.has-sidechain {
+  border-color: var(--sidechain-border);
+  background-color: rgba(240, 253, 250, 0.2);
+  position: relative;
+}
+
+.tool-use-card.has-sidechain::after {
+  content: '';
+  position: absolute;
+  bottom: -1rem;
+  left: 50%;
+  width: 3px;
+  height: 1rem;
+  background: linear-gradient(to bottom, var(--sidechain-border), transparent);
+  transform: translateX(-50%);
+  opacity: 0.6;
+}
+
+.sidechain-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  background-color: var(--sidechain-bg);
+  border: 1px solid var(--sidechain-border);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #0d9488;
+  animation: subtle-pulse 2s ease-in-out infinite;
+}
+
+@keyframes subtle-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.8; }
+}
+
+/* Orphaned Sidechains Section */
+.orphaned-sidechains-section {
+  margin-top: 2rem;
+  padding: 1.5rem;
+  background-color: var(--warning-bg);
+  border: 2px solid var(--warning-border);
+  border-radius: 12px;
+}
+
+.orphaned-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--warning-border);
+}
+
+.orphaned-icon {
+  font-size: 1.5rem;
+}
+
+.orphaned-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.orphaned-description {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.orphaned-sidechains-section .sidechain-container {
+  margin-left: 0;
+  background-color: rgba(255, 255, 255, 0.8);
+  border-color: var(--warning-border);
+}
+
+.orphaned-sidechains-section .sidechain-header {
+  background-color: rgba(255, 251, 235, 0.5);
+  border-bottom-color: var(--warning-border);
 }
 
 /* Message Metadata */
@@ -1253,4 +1409,134 @@ body {
 
 .expandable-content .show-more-btn:hover {
   background-color: var(--primary-hover);
+}
+
+/* Unknown Object Warning */
+.unknown-object-warning {
+  background-color: #fff3cd;
+  border: 1px solid #ffeaa7;
+  border-radius: 4px;
+  padding: 0.75rem;
+  margin-bottom: 1rem;
+  color: #856404;
+  font-size: 0.875rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.unknown-object-warning::before {
+  content: "⚠️";
+  font-size: 1rem;
+}
+
+/* New Content Processing Styles */
+.content-warning {
+  background-color: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  border-radius: 4px;
+  padding: 0.75rem;
+  margin-bottom: 1rem;
+  color: #92400e;
+  font-size: 0.875rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.content-error {
+  background-color: var(--error-bg);
+  border: 1px solid var(--error-border);
+  border-radius: 4px;
+  padding: 0.75rem;
+  color: var(--error-text);
+  font-size: 0.875rem;
+}
+
+.no-content {
+  background-color: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.75rem;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-style: italic;
+  text-align: center;
+}
+
+.command-stdout,
+.command-stderr {
+  margin-bottom: 0.75rem;
+}
+
+.command-stderr .output-label {
+  color: var(--error-text);
+}
+
+.collapsible-section {
+  margin-top: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background-color: var(--surface);
+}
+
+.collapsible-section.expanded .section-content {
+  display: block;
+}
+
+.collapsible-section:not(.expanded) .section-content {
+  display: none;
+}
+
+.section-header {
+  padding: 0.75rem 1rem;
+  background-color: var(--background);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  user-select: none;
+  transition: background-color 0.2s;
+}
+
+.section-header:hover {
+  background-color: var(--border-light);
+}
+
+.section-toggle {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  transition: transform 0.2s;
+  width: 12px;
+  text-align: center;
+}
+
+.collapsible-section.expanded .section-toggle {
+  transform: rotate(90deg);
+}
+
+.section-title {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+}
+
+.section-content {
+  padding: 1rem;
+}
+
+.metadata-item {
+  margin-bottom: 0.5rem;
+  padding: 0.5rem;
+  background-color: var(--background);
+  border-radius: 4px;
+  font-size: 0.875rem;
+}
+
+.metadata-item strong {
+  color: var(--text-secondary);
+  font-weight: 600;
+  margin-right: 0.5rem;
 }
