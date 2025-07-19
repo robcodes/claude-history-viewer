@@ -56,3 +56,7 @@ To test: `curl http://localhost:3457/api/stats`
 - `.replit`: Configured for auto-deployment
 - `run.sh`: Helper script for easy execution
 - `package.json`: npm dependencies (express, glob, etc.)
+
+
+## Important
+- This is an open source repo, please make sure to never commit or push private information like api keys or anything, if accidentally used for testing

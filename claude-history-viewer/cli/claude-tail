@@ -1,0 +1,399 @@
+#!/bin/bash
+
+# Claude Conversation Tail - Beautiful CLI viewer for Claude Code conversations
+# Usage: claude_tail.bsh [options] [jsonl_file]
+# Options:
+#   -n NUM     Number of messages to show (default: 10)
+#   -f         Follow mode (like tail -f)
+#   -s         Show sidechains
+#   -t         Show thinking blocks
+#   -m         Show metadata (tokens, timestamps)
+#   -a         Show all content types
+#   -l NUM     Max content length (default: 300000, use 0 for no limit)
+#   -p         Preserve newlines (default: enabled)
+#   --no-color Disable colors (useful for piping to files or other tools)
+#   --help     Show this help
+
+# Color definitions (will be set after parsing arguments)
+COLOR_RESET=''
+COLOR_USER_BG=''
+COLOR_ASSISTANT_BG=''
+COLOR_TOOL_BG=''
+COLOR_RESULT_BG=''
+COLOR_ERROR_BG=''
+COLOR_SIDECHAIN_BG=''
+COLOR_THINKING_BG=''
+COLOR_WHITE=''
+COLOR_BLACK=''
+COLOR_DIM=''
+COLOR_BOLD=''
+COLOR_CYAN=''
+
+# Default options
+NUM_MESSAGES=10
+FOLLOW_MODE=false
+SHOW_SIDECHAINS=false
+SHOW_THINKING=false
+SHOW_METADATA=false
+MAX_LENGTH=300000
+PRESERVE_NEWLINES=true
+NO_COLOR=false
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -n)
+            NUM_MESSAGES="$2"
+            shift 2
+            ;;
+        -f)
+            FOLLOW_MODE=true
+            shift
+            ;;
+        -s)
+            SHOW_SIDECHAINS=true
+            shift
+            ;;
+        -t)
+            SHOW_THINKING=true
+            shift
+            ;;
+        -m)
+            SHOW_METADATA=true
+            shift
+            ;;
+        -a)
+            SHOW_SIDECHAINS=true
+            SHOW_THINKING=true
+            SHOW_METADATA=true
+            shift
+            ;;
+        -l)
+            MAX_LENGTH="$2"
+            shift 2
+            ;;
+        -p)
+            PRESERVE_NEWLINES=true
+            shift
+            ;;
+        --no-color)
+            NO_COLOR=true
+            shift
+            ;;
+        --help)
+            grep '^#' "$0" | grep -E '(Usage:|Options:|  )' | sed 's/^# //'
+            exit 0
+            ;;
+        *)
+            JSONL_FILE="$1"
+            shift
+            ;;
+    esac
+done
+
+# Set colors based on NO_COLOR flag
+if [ "$NO_COLOR" = "true" ]; then
+    COLOR_RESET=''
+    COLOR_USER_BG=''
+    COLOR_ASSISTANT_BG=''
+    COLOR_TOOL_BG=''
+    COLOR_RESULT_BG=''
+    COLOR_ERROR_BG=''
+    COLOR_SIDECHAIN_BG=''
+    COLOR_THINKING_BG=''
+    COLOR_WHITE=''
+    COLOR_BLACK=''
+    COLOR_DIM=''
+    COLOR_BOLD=''
+    COLOR_CYAN=''
+else
+    COLOR_RESET='\033[0m'
+    COLOR_USER_BG='\033[48;5;33m'      # Blue background
+    COLOR_ASSISTANT_BG='\033[48;5;28m'  # Green background
+    COLOR_TOOL_BG='\033[48;5;208m'      # Orange background
+    COLOR_RESULT_BG='\033[48;5;93m'     # Purple background
+    COLOR_ERROR_BG='\033[48;5;196m'     # Red background
+    COLOR_SIDECHAIN_BG='\033[48;5;240m' # Gray background
+    COLOR_THINKING_BG='\033[48;5;238m'  # Dark gray background
+    COLOR_WHITE='\033[97m'
+    COLOR_BLACK='\033[30m'
+    COLOR_DIM='\033[2m'
+    COLOR_BOLD='\033[1m'
+    COLOR_CYAN='\033[36m'
+fi
+
+# If no file specified, use the most recent JSONL file
+if [ -z "$JSONL_FILE" ]; then
+    CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    # Find all JSONL files and get the most recent one that has conversation messages
+    JSONL_FILE=$(
+        find "$CLAUDE_DIR/projects" -name "*.jsonl" -type f 2>/dev/null | while read -r file; do
+            # Check if file has any user or assistant messages (not just summary)
+            if grep -q '"type":"user"\|"type":"assistant"' "$file" 2>/dev/null; then
+                # Output the file with its modification time
+                stat -c "%Y %n" "$file" 2>/dev/null || stat -f "%m %N" "$file" 2>/dev/null
+            fi
+        done | sort -rn | head -n1 | cut -d' ' -f2-
+    )
+    
+    if [ -z "$JSONL_FILE" ]; then
+        echo "Error: No conversation JSONL files found in $CLAUDE_DIR/projects/" >&2
+        echo "       (Summary files are automatically skipped)" >&2
+        exit 1
+    fi
+fi
+
+# Function to format timestamp
+format_timestamp() {
+    local ts="$1"
+    echo "${ts:11:8}"
+}
+
+# Function to format content (handle newlines)
+format_content() {
+    local text="$1"
+    if [ "$PRESERVE_NEWLINES" = "true" ]; then
+        # Preserve newlines but indent continuation lines
+        echo "$text" | sed '2,$s/^/        /'
+    else
+        # Replace newlines with spaces
+        echo "$text" | tr '\n' ' '
+    fi
+}
+
+# Function to truncate text
+truncate_text() {
+    local text="$1"
+    local max_len="${2:-$MAX_LENGTH}"
+    if [ "$max_len" = "0" ] || [ "$max_len" = "0" ]; then
+        # No truncation
+        echo "$text"
+    elif [ ${#text} -gt $max_len ]; then
+        echo "${text:0:$max_len}..."
+    else
+        echo "$text"
+    fi
+}
+
+# Function to print message label
+print_label() {
+    local label_type="$1"
+    local time="$2"
+    local extra_info="${3:-}"
+    
+    if [ "$NO_COLOR" = "true" ]; then
+        case "$label_type" in
+            "USER") printf "[USER] %s " "$time" ;;
+            "ASSISTANT") printf "[CLAUDE] %s " "$time" ;;
+            "TOOL") printf "[TOOL: %s] %s " "$extra_info" "$time" ;;
+            "RESULT") printf "[RESULT] %s " "$time" ;;
+            "ERROR") printf "[ERROR] %s " "$time" ;;
+            "SUB-AGENT") printf "[SUB-AGENT] %s " "$time" ;;
+            "SUB-CLAUDE") printf "[SUB-CLAUDE] %s " "$time" ;;
+            "THINKING") printf "[THINKING] %s " "$time" ;;
+        esac
+    else
+        case "$label_type" in
+            "USER") printf "${COLOR_USER_BG}${COLOR_WHITE}${COLOR_BOLD} 👤 USER ${COLOR_RESET}${COLOR_DIM} %s${COLOR_RESET} " "$time" ;;
+            "ASSISTANT") printf "${COLOR_ASSISTANT_BG}${COLOR_WHITE}${COLOR_BOLD} 🤖 CLAUDE ${COLOR_RESET}${COLOR_DIM} %s${COLOR_RESET} " "$time" ;;
+            "TOOL") printf "${COLOR_TOOL_BG}${COLOR_BLACK}${COLOR_BOLD} 🔧 %s ${COLOR_RESET}${COLOR_DIM} %s${COLOR_RESET} " "$extra_info" "$time" ;;
+            "RESULT") printf "${COLOR_RESULT_BG}${COLOR_WHITE}${COLOR_BOLD} ✅ RESULT ${COLOR_RESET}${COLOR_DIM} %s${COLOR_RESET} " "$time" ;;
+            "ERROR") printf "${COLOR_ERROR_BG}${COLOR_WHITE}${COLOR_BOLD} ❌ ERROR ${COLOR_RESET}${COLOR_DIM} %s${COLOR_RESET} " "$time" ;;
+            "SUB-AGENT") printf "${COLOR_SIDECHAIN_BG}${COLOR_WHITE}${COLOR_BOLD} 🔗 SUB-AGENT ${COLOR_RESET}${COLOR_DIM} %s${COLOR_RESET} " "$time" ;;
+            "SUB-CLAUDE") printf "${COLOR_SIDECHAIN_BG}${COLOR_WHITE}${COLOR_BOLD} 🔗 SUB-CLAUDE ${COLOR_RESET}${COLOR_DIM} %s${COLOR_RESET} " "$time" ;;
+            "THINKING") printf "${COLOR_THINKING_BG}${COLOR_WHITE}${COLOR_DIM} 💭 THINKING ${COLOR_RESET}${COLOR_DIM} %s${COLOR_RESET} " "$time" ;;
+        esac
+    fi
+}
+
+# Function to process a single message
+process_message() {
+    local line="$1"
+    
+    # Skip summary lines
+    if echo "$line" | grep -q '"type":"summary"'; then
+        return
+    fi
+    
+    # Extract basic fields
+    local type=$(echo "$line" | jq -r '.type')
+    local timestamp=$(echo "$line" | jq -r '.timestamp')
+    local is_sidechain=$(echo "$line" | jq -r '.isSidechain // false')
+    
+    # Skip if not a valid message type
+    if [ "$type" != "user" ] && [ "$type" != "assistant" ]; then
+        return
+    fi
+    
+    # Skip sidechains if not showing them
+    if [ "$is_sidechain" = "true" ] && [ "$SHOW_SIDECHAINS" = "false" ]; then
+        return
+    fi
+    
+    # Format time
+    local time=$(format_timestamp "$timestamp")
+    
+    # Process based on type
+    if [ "$type" = "user" ]; then
+        # Check if it's a tool result
+        local content_type=$(echo "$line" | jq -r '.message.content[0].type // "text"')
+        
+        if [ "$content_type" = "tool_result" ]; then
+            local is_error=$(echo "$line" | jq -r '.message.content[0].is_error // false')
+            local raw_content=$(echo "$line" | jq -r '.message.content[0].content // ""')
+            local content=$(format_content "$raw_content")
+            
+            if [ "$is_error" = "true" ]; then
+                print_label "ERROR" "$time"
+            else
+                print_label "RESULT" "$time"
+            fi
+            
+            # Add metadata if requested
+            if [ "$SHOW_METADATA" = "true" ]; then
+                local duration=$(echo "$line" | jq -r '.toolUseResult.totalDurationMs // empty' 2>/dev/null)
+                if [ -n "$duration" ]; then
+                    printf "${COLOR_CYAN}[%.1fs]${COLOR_RESET} " "$(echo "scale=1; $duration/1000" | bc 2>/dev/null || echo "?")"
+                fi
+            fi
+            
+            truncate_text "$content"
+            echo
+        else
+            # Regular user message
+            local raw_content=$(echo "$line" | jq -r '.message.content // .message.content[0].text // "User message"')
+            local content=$(format_content "$raw_content")
+            
+            if [ "$is_sidechain" = "true" ]; then
+                print_label "SUB-AGENT" "$time"
+            else
+                print_label "USER" "$time"
+            fi
+            
+            truncate_text "$content"
+            echo
+        fi
+        
+    elif [ "$type" = "assistant" ]; then
+        # Check content type
+        local content_array=$(echo "$line" | jq -c '.message.content')
+        local first_type=$(echo "$content_array" | jq -r '.[0].type // "text"')
+        
+        if [ "$first_type" = "tool_use" ]; then
+            # Tool use
+            local tool_name=$(echo "$content_array" | jq -r '.[0].name')
+            local tool_desc=""
+            
+            # Get tool description based on tool type
+            case "$tool_name" in
+                "Bash")
+                    tool_desc=$(echo "$content_array" | jq -r '.[0].input.command // ""' | tr '\n' ' ')
+                    if [ "$NO_COLOR" = "true" ]; then
+                        tool_desc="${tool_desc:0:80}"
+                    else
+                        tool_desc="$ ${tool_desc:0:80}"
+                    fi
+                    ;;
+                "Read"|"Write"|"Edit"|"MultiEdit")
+                    tool_desc=$(echo "$content_array" | jq -r '.[0].input.file_path // ""')
+                    if [ "$NO_COLOR" = "false" ]; then
+                        tool_desc="📄 $tool_desc"
+                    fi
+                    ;;
+                "WebFetch"|"WebSearch")
+                    tool_desc=$(echo "$content_array" | jq -r '.[0].input.url // .[0].input.query // ""' | tr '\n' ' ')
+                    if [ "$NO_COLOR" = "true" ]; then
+                        tool_desc="${tool_desc:0:60}"
+                    else
+                        tool_desc="🔗 ${tool_desc:0:60}"
+                    fi
+                    ;;
+                "Task")
+                    tool_desc=$(echo "$content_array" | jq -r '.[0].input.description // ""')
+                    if [ "$NO_COLOR" = "false" ]; then
+                        tool_desc="📋 $tool_desc"
+                    fi
+                    ;;
+                "TodoWrite")
+                    local todo_count=$(echo "$content_array" | jq -r '.[0].input.todos | length')
+                    if [ "$NO_COLOR" = "true" ]; then
+                        tool_desc="$todo_count todos"
+                    else
+                        tool_desc="✅ $todo_count todos"
+                    fi
+                    ;;
+                *)
+                    tool_desc=$(echo "$content_array" | jq -r '.[0].input | tostring' | tr '\n' ' ')
+                    tool_desc="${tool_desc:0:60}"
+                    ;;
+            esac
+            
+            print_label "TOOL" "$time" "$tool_name"
+            if [ "$NO_COLOR" = "true" ]; then
+                printf "%s\n" "$tool_desc"
+            else
+                printf "%s\n" "$tool_desc"
+            fi
+                   
+        elif [ "$first_type" = "thinking" ]; then
+            # Thinking block
+            if [ "$SHOW_THINKING" = "true" ]; then
+                local raw_thinking=$(echo "$content_array" | jq -r '.[0].thinking // ""')
+                local thinking=$(format_content "$raw_thinking")
+                print_label "THINKING" "$time"
+                truncate_text "$thinking"
+                echo
+            fi
+        else
+            # Regular text response
+            local raw_text=$(echo "$content_array" | jq -r '.[0].text // "Assistant message"')
+            local text=$(format_content "$raw_text")
+            
+            if [ "$is_sidechain" = "true" ]; then
+                print_label "SUB-CLAUDE" "$time"
+            else
+                print_label "ASSISTANT" "$time"
+            fi
+            
+            # Add metadata if requested
+            if [ "$SHOW_METADATA" = "true" ]; then
+                local tokens=$(echo "$line" | jq -r '.message.usage.output_tokens // empty' 2>/dev/null)
+                if [ -n "$tokens" ]; then
+                    printf "${COLOR_CYAN}[${tokens}t]${COLOR_RESET} "
+                fi
+            fi
+            
+            truncate_text "$text"
+            echo
+        fi
+    fi
+}
+
+# Main execution
+if [ "$NO_COLOR" = "true" ]; then
+    echo "Claude Conversation: $(basename "$JSONL_FILE")"
+    echo "$(dirname "$JSONL_FILE")"
+else
+    echo -e "${COLOR_BOLD}📋 Claude Conversation: $(basename "$JSONL_FILE")${COLOR_RESET}"
+    echo -e "${COLOR_DIM}$(dirname "$JSONL_FILE")${COLOR_RESET}"
+fi
+echo ""
+
+if [ "$FOLLOW_MODE" = true ]; then
+    # Show initial messages
+    tail -n "$NUM_MESSAGES" "$JSONL_FILE" | while IFS= read -r line; do
+        [ -n "$line" ] && process_message "$line"
+    done
+    
+    echo -e "\n${COLOR_DIM}--- Following new messages (Ctrl+C to stop) ---${COLOR_RESET}\n"
+    
+    # Follow new messages
+    tail -f "$JSONL_FILE" | while IFS= read -r line; do
+        [ -n "$line" ] && process_message "$line"
+    done
+else
+    # Just show last N messages
+    tail -n "$NUM_MESSAGES" "$JSONL_FILE" | while IFS= read -r line; do
+        [ -n "$line" ] && process_message "$line"
+    done
+fi
