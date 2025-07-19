@@ -12,6 +12,7 @@
 #   -l NUM     Max content length (default: 300000, use 0 for no limit)
 #   -p         Preserve newlines (default: enabled)
 #   --no-color Disable colors (useful for piping to files or other tools)
+#   --before-compact  Start output from before the compact message (incompatible with -f)
 #   --help     Show this help
 
 # Color definitions (will be set after parsing arguments)
@@ -38,6 +39,7 @@ SHOW_METADATA=false
 MAX_LENGTH=300000
 PRESERVE_NEWLINES=true
 NO_COLOR=false
+BEFORE_COMPACT=false
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -80,6 +82,10 @@ while [[ $# -gt 0 ]]; do
             NO_COLOR=true
             shift
             ;;
+        --before-compact)
+            BEFORE_COMPACT=true
+            shift
+            ;;
         --help)
             grep '^#' "$0" | grep -E '(Usage:|Options:|  )' | sed 's/^# //'
             exit 0
@@ -90,6 +96,12 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Check for incompatible options
+if [ "$BEFORE_COMPACT" = "true" ] && [ "$FOLLOW_MODE" = "true" ]; then
+    echo "Error: --before-compact and -f (follow mode) cannot be used together" >&2
+    exit 1
+fi
 
 # Set colors based on NO_COLOR flag
 if [ "$NO_COLOR" = "true" ]; then
@@ -379,7 +391,29 @@ else
 fi
 echo ""
 
-if [ "$FOLLOW_MODE" = true ]; then
+if [ "$BEFORE_COMPACT" = true ]; then
+    # Find the line number of the compact message
+    COMPACT_LINE=$(grep -n '"isCompactSummary":true' "$JSONL_FILE" | tail -1 | cut -d: -f1)
+    
+    if [ -z "$COMPACT_LINE" ]; then
+        echo "Error: No compact message found in the file" >&2
+        exit 1
+    fi
+    
+    # Calculate starting line (compact line minus NUM_MESSAGES)
+    START_LINE=$((COMPACT_LINE - NUM_MESSAGES))
+    if [ $START_LINE -lt 1 ]; then
+        START_LINE=1
+    fi
+    
+    # Calculate number of lines to show (up to but not including the compact line)
+    LINES_TO_SHOW=$((COMPACT_LINE - START_LINE))
+    
+    # Show messages from START_LINE up to (but not including) the compact line
+    sed -n "${START_LINE},$((COMPACT_LINE - 1))p" "$JSONL_FILE" | while IFS= read -r line; do
+        [ -n "$line" ] && process_message "$line"
+    done
+elif [ "$FOLLOW_MODE" = true ]; then
     # Show initial messages
     tail -n "$NUM_MESSAGES" "$JSONL_FILE" | while IFS= read -r line; do
         [ -n "$line" ] && process_message "$line"

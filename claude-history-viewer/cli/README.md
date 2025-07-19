@@ -45,6 +45,7 @@ ln -s $(pwd)/claude-tail ~/.local/bin/claude-tail
 - `-l NUM` - Max content length (default: 300000, use 0 for no limit)
 - `-p` - Preserve newlines (default: enabled)
 - `--no-color` - Disable colors (useful for piping to files or other tools)
+- `--before-compact` - Start output from before the compact message (incompatible with -f)
 - `--help` - Show help
 
 ### Features
@@ -75,6 +76,12 @@ ln -s $(pwd)/claude-tail ~/.local/bin/claude-tail
 
 # Pipe to other tools (e.g., grep)
 ./claude-tail --no-color | grep "ERROR"
+
+# View conversation context before compaction
+./claude-tail --before-compact -n 50 --no-color
+
+# Get context for Claude Code to understand previous conversation
+./claude-tail --before-compact -n 500 --no-color
 ```
 
 ### Message Types
